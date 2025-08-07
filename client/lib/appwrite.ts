@@ -1,54 +1,129 @@
-import { Client, Account, Databases, ID } from "appwrite";
+import { Client, Account, Databases, Storage, ID } from 'appwrite';
 
-// Initialize Appwrite client
-const client = new Client();
+// Appwrite configuration from environment variables
+export const APPWRITE_CONFIG = {
+  endpoint: import.meta.env.VITE_APPWRITE_ENDPOINT,
+  projectId: import.meta.env.VITE_APPWRITE_PROJECT_ID,
+  databaseId: import.meta.env.VITE_APPWRITE_DATABASE_ID,
+  usersCollectionId: import.meta.env.VITE_APPWRITE_USERS_COLLECTION_ID,
+  itemsCollectionId: import.meta.env.VITE_APPWRITE_ITEMS_COLLECTION_ID,
+};
 
-// Get configuration from environment variables or use defaults
-const APPWRITE_ENDPOINT =
-  import.meta.env.VITE_APPWRITE_ENDPOINT || "https://cloud.appwrite.io/v1";
-const APPWRITE_PROJECT_ID =
-  import.meta.env.VITE_APPWRITE_PROJECT_ID || "foundit-demo";
+// Create Appwrite client
+export const client = new Client()
+  .setEndpoint(APPWRITE_CONFIG.endpoint)
+  .setProject(APPWRITE_CONFIG.projectId);
 
-client.setEndpoint(APPWRITE_ENDPOINT).setProject(APPWRITE_PROJECT_ID);
-
+// Initialize Appwrite services
 export const account = new Account(client);
 export const databases = new Databases(client);
+export const storage = new Storage(client);
 
-export { ID, client };
+// Export ID utility
+export { ID };
 
-// Helper functions to create fresh instances to avoid body stream conflicts
-export const createFreshClient = () => {
-  const freshClient = new Client();
-  freshClient.setEndpoint(APPWRITE_ENDPOINT).setProject(APPWRITE_PROJECT_ID);
-  return freshClient;
-};
-
-export const createFreshAccount = () => {
-  return new Account(createFreshClient());
-};
-
-// Appwrite configuration - update these with your project details
-export const APPWRITE_CONFIG = {
-  endpoint: APPWRITE_ENDPOINT,
-  projectId: APPWRITE_PROJECT_ID,
-  databaseId: import.meta.env.VITE_APPWRITE_DATABASE_ID || "foundit-db",
-  usersCollectionId:
-    import.meta.env.VITE_APPWRITE_USERS_COLLECTION_ID || "users",
-  itemsCollectionId:
-    import.meta.env.VITE_APPWRITE_ITEMS_COLLECTION_ID || "items",
-};
-
-// User roles
+// User roles enum
 export enum UserRole {
-  USER = "user",
-  ADMIN = "admin",
-  MODERATOR = "moderator",
+  USER = 'user',
+  MODERATOR = 'moderator',
+  ADMIN = 'admin'
 }
 
-// For demo purposes, we'll use localStorage to simulate user roles
-// In production, this would be managed through Appwrite's user attributes or teams
-export const DEMO_USERS = {
-  "admin@foundit.com": { role: UserRole.ADMIN, name: "Admin User" },
-  "moderator@foundit.com": { role: UserRole.MODERATOR, name: "Moderator User" },
-  "user@foundit.com": { role: UserRole.USER, name: "Regular User" },
+// Demo users for testing (you mentioned these in your AuthContext)
+export const DEMO_USERS = [
+  {
+    email: 'admin@foundit.com',
+    password: 'AdminFoundIt2024!',
+    name: 'Admin User',
+    role: UserRole.ADMIN
+  },
+  {
+    email: 'walter@foundit.com', 
+    password: 'WalterFoundIt2024!',
+    name: 'Walter Enebeli-uzor',
+    role: UserRole.ADMIN
+  },
+  {
+    email: 'walterenebeli@gmail.com',
+    password: 'WalterFoundIt2024!', 
+    name: 'Walter Enebeli-uzor',
+    role: UserRole.ADMIN
+  }
+];
+
+// Function to create fresh account instance (for auth issues)
+export const createFreshAccount = () => {
+  const freshClient = new Client()
+    .setEndpoint(APPWRITE_CONFIG.endpoint)
+    .setProject(APPWRITE_CONFIG.projectId);
+  
+  return new Account(freshClient);
+};
+
+// Collection IDs for easy reference
+export const COLLECTIONS = {
+  USERS: APPWRITE_CONFIG.usersCollectionId,
+  ITEMS: APPWRITE_CONFIG.itemsCollectionId,
+  // You can add more collections here as needed
+  MATCHES: 'matches', // Create this collection if you want to store AI matches
+  CONTACTS: 'contacts', // Create this collection for contact requests
+  NOTIFICATIONS: 'notifications', // For user notifications
+};
+
+// Database ID for easy reference
+export const DATABASE_ID = APPWRITE_CONFIG.databaseId;
+
+// Helper function to handle Appwrite errors
+export const handleAppwriteError = (error: any) => {
+  console.error('Appwrite error:', error);
+  
+  if (error.code === 401) {
+    return 'Authentication required. Please log in.';
+  } else if (error.code === 404) {
+    return 'Item not found.';
+  } else if (error.code === 409) {
+    return 'Item already exists.';
+  } else if (error.message?.includes('Failed to fetch')) {
+    return 'Unable to connect to the server. Please check your internet connection.';
+  } else {
+    return error.message || 'An unexpected error occurred.';
+  }
+};
+
+// Helper function to create item document structure
+export const createItemDocument = (itemData: any) => {
+  return {
+    type: itemData.type,
+    title: itemData.title,
+    description: itemData.description,
+    category: itemData.category,
+    // Store location as separate fields for easier querying
+    address: itemData.location?.address || '',
+    city: itemData.location?.city || '',
+    state: itemData.location?.state || '',
+    zipCode: itemData.location?.zipCode || '',
+    country: itemData.location?.country || 'US',
+    landmark: itemData.location?.landmark || '',
+    // Store contact info as separate fields
+    contactName: itemData.contactInfo?.name || '',
+    contactEmail: itemData.contactInfo?.email || '',
+    contactPhone: itemData.contactInfo?.phone || '',
+    preferredContact: itemData.contactInfo?.preferredContact || 'email',
+    anonymous: itemData.contactInfo?.anonymous || false,
+    // Arrays and other fields
+    tags: itemData.tags || [],
+    images: itemData.images || [],
+    status: itemData.status || 'active',
+    userId: itemData.userId,
+    // Type-specific fields
+    ...(itemData.type === 'lost' && {
+      dateLost: itemData.dateLost,
+      reward: itemData.reward || 0,
+    }),
+    ...(itemData.type === 'found' && {
+      dateFound: itemData.dateFound,
+      handedToAuthority: itemData.handedToAuthority || false,
+      authorityContact: itemData.authorityContact || '',
+    }),
+  };
 };
