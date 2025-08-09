@@ -39,6 +39,8 @@ import {
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import Header from "@/components/Header";
+import { databases, DATABASE_ID, COLLECTIONS, handleAppwriteError } from "@/lib/appwrite";
+import { Query } from "appwrite";
 import {
   Item,
   LostItem,
@@ -54,6 +56,7 @@ export default function Search() {
   const [categories, setCategories] = useState<ItemCategory[]>([]);
   const [activeTab, setActiveTab] = useState<"all" | "lost" | "found">("all");
   const [showSuccess, setShowSuccess] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Search filters - check both 'q' and 'keyword' parameters
   const [filters, setFilters] = useState<SearchFilters>({
@@ -120,10 +123,10 @@ export default function Search() {
   }, [searchParams]);
 
   const fetchCategories = async () => {
-    // Skip API call and use default categories since backend isn't available
-    const defaultCategories = [
+    // Use predefined categories - these should match what's used in the Report form
+    const defaultCategories: ItemCategory[] = [
       "Electronics",
-      "Clothing",
+      "Clothing", 
       "Jewelry",
       "Books",
       "Keys",
@@ -140,139 +143,145 @@ export default function Search() {
   const fetchItems = async () => {
     console.log("Fetching items with filters:", filters, "activeTab:", activeTab);
     setLoading(true);
+    setError(null);
 
-    // Use demo data since API isn't available
-    const demoItems = [
-      {
-        id: "demo-1",
-        type: "lost",
-        title: "iPhone 13 Pro",
-        description: "Black iPhone 13 Pro with blue case. Lost near Central Park during morning jog.",
-        category: "Electronics",
-        location: { city: "New York", state: "NY", address: "Central Park" },
-        contactInfo: { name: "John Doe", email: "john@example.com" },
-        status: "active",
-        createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-        dateLost: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-        dateReported: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-        tags: ["iPhone", "phone", "mobile"],
-        images: []
-      },
-      {
-        id: "demo-2",
-        type: "found",
-        title: "Brown Leather Wallet",
-        description: "Found a brown leather wallet with credit cards and ID. Found at Starbucks on 5th Avenue.",
-        category: "Accessories",
-        location: { city: "New York", state: "NY", address: "5th Avenue" },
-        contactInfo: { name: "Jane Smith", email: "jane@example.com" },
-        status: "active",
-        createdAt: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
-        dateFound: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
-        dateReported: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
-        tags: ["wallet", "leather", "cards"],
-        images: []
-      },
-      {
-        id: "demo-3",
-        type: "lost",
-        title: "House Keys with Red Keychain",
-        description: "Set of house keys with a red Honda keychain. Lost near the university campus around 3 PM.",
-        category: "Keys",
-        location: { city: "Boston", state: "MA", address: "University Campus" },
-        contactInfo: { name: "Mike Johnson", email: "mike@example.com" },
-        status: "active",
-        createdAt: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
-        dateLost: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
-        dateReported: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
-        tags: ["keys", "keychain", "red", "Honda"],
-        images: []
-      },
-      {
-        id: "demo-4",
-        type: "found",
-        title: "MacBook Pro Laptop",
-        description: "Found MacBook Pro 13-inch with coding stickers. Left in coffee shop on Main Street.",
-        category: "Electronics",
-        location: { city: "San Francisco", state: "CA", address: "Main Street" },
-        contactInfo: { name: "Sarah Wilson", email: "sarah@example.com" },
-        status: "active",
-        createdAt: new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString(),
-        dateFound: new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString(),
-        dateReported: new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString(),
-        tags: ["laptop", "MacBook", "computer"],
-        images: []
-      },
-      {
-        id: "demo-5",
-        type: "lost",
-        title: "Gold Watch",
-        description: "Lost gold Rolex watch with leather strap. Family heirloom, very sentimental value.",
-        category: "Jewelry",
-        location: { city: "Miami", state: "FL", address: "Beach Boulevard" },
-        contactInfo: { name: "David Lee", email: "david@example.com" },
-        status: "active",
-        createdAt: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
-        dateLost: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
-        dateReported: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
-        tags: ["watch", "gold", "Rolex"],
-        images: []
-      },
-      {
-        id: "demo-6",
-        type: "found",
-        title: "Blue Backpack",
-        description: "Found blue JanSport backpack with school supplies. Found at bus stop on Elm Street.",
-        category: "Bags",
-        location: { city: "Chicago", state: "IL", address: "Elm Street" },
-        contactInfo: { name: "Amy Chen", email: "amy@example.com" },
-        status: "active",
-        createdAt: new Date(Date.now() - 16 * 60 * 60 * 1000).toISOString(),
-        dateFound: new Date(Date.now() - 16 * 60 * 60 * 1000).toISOString(),
-        dateReported: new Date(Date.now() - 16 * 60 * 60 * 1000).toISOString(),
-        tags: ["backpack", "blue", "school"],
-        images: []
+    try {
+      // Build Appwrite queries
+      const queries: string[] = [];
+
+      // Add pagination
+      const offset = (currentPage - 1) * itemsPerPage;
+      queries.push(Query.limit(itemsPerPage));
+      queries.push(Query.offset(offset));
+
+      // Add ordering by creation date (newest first)
+      queries.push(Query.orderDesc('$createdAt'));
+
+      // Add status filter (only show active items)
+      queries.push(Query.equal('status', 'active'));
+
+      // Filter by type if specified
+      if (activeTab !== "all") {
+        queries.push(Query.equal('type', activeTab));
       }
-    ];
 
-    // Apply filters to demo data
-    let filteredItems = demoItems;
+      // Filter by category if specified
+      if (filters.category) {
+        queries.push(Query.equal('category', filters.category));
+      }
 
-    if (filters.keyword) {
-      const keyword = filters.keyword.toLowerCase();
-      filteredItems = filteredItems.filter(item =>
-        item.title.toLowerCase().includes(keyword) ||
-        item.description.toLowerCase().includes(keyword) ||
-        item.category.toLowerCase().includes(keyword) ||
-        item.tags.some(tag => tag.toLowerCase().includes(keyword))
+      // For keyword search, we'll need to use multiple queries since Appwrite doesn't support full-text search
+      // We'll search in title, description, and tags
+      if (filters.keyword) {
+        const keyword = filters.keyword.toLowerCase();
+        // Note: This is a simplified approach. For better search, you might want to implement
+        // a more sophisticated search solution or use Appwrite's full-text search when available
+        queries.push(Query.search('title', keyword));
+      }
+
+      // For location search
+      if (filters.location) {
+        const location = filters.location.toLowerCase();
+        // Search in city, state, and address fields
+        queries.push(Query.search('city', location));
+      }
+
+      console.log("Appwrite queries:", queries);
+
+      // Fetch items from Appwrite
+      const response = await databases.listDocuments(
+        DATABASE_ID,
+        COLLECTIONS.ITEMS,
+        queries
       );
-    }
 
-    if (filters.category) {
-      filteredItems = filteredItems.filter(item => item.category === filters.category);
-    }
+      console.log("Appwrite response:", response);
 
-    if (filters.location) {
-      const location = filters.location.toLowerCase();
-      filteredItems = filteredItems.filter(item =>
-        item.location.city.toLowerCase().includes(location) ||
-        item.location.state.toLowerCase().includes(location) ||
-        item.location.address.toLowerCase().includes(location)
-      );
-    }
+      // Transform Appwrite documents to our Item interface
+      const transformedItems: Item[] = response.documents.map((doc: any) => ({
+        id: doc.$id,
+        type: doc.type,
+        title: doc.title,
+        description: doc.description,
+        category: doc.category,
+        location: {
+          address: doc.address || '',
+          city: doc.city || '',
+          state: doc.state || '',
+          zipCode: doc.zipCode || '',
+          country: doc.country || 'US',
+          landmark: doc.landmark || ''
+        },
+        contactInfo: {
+          name: doc.contactName || '',
+          email: doc.contactEmail || '',
+          phone: doc.contactPhone || '',
+          preferredContact: doc.preferredContact || 'email',
+          anonymous: doc.anonymous || false
+        },
+        status: doc.status,
+        dateReported: doc.$createdAt,
+        updatedAt: doc.$updatedAt,
+        tags: doc.tags || [],
+        images: doc.images || [],
+        userId: doc.userId,
+        // Type-specific fields
+        ...(doc.type === 'lost' && {
+          dateLost: doc.dateLost,
+          reward: doc.reward || 0,
+        }),
+        ...(doc.type === 'found' && {
+          dateFound: doc.dateFound,
+          handedToAuthority: doc.handedToAuthority || false,
+          authorityContact: doc.authorityContact || '',
+        }),
+      }));
 
-    if (activeTab !== "all") {
-      filteredItems = filteredItems.filter(item => item.type === activeTab);
-    }
+      // Apply client-side filtering for advanced search if needed
+      let filteredItems = transformedItems;
 
-    // Simulate realistic loading time
-    setTimeout(() => {
+      // Additional keyword filtering (since Appwrite search might not cover all fields)
+      if (filters.keyword && !queries.some(q => q.includes('search'))) {
+        const keyword = filters.keyword.toLowerCase();
+        filteredItems = filteredItems.filter(item =>
+          item.title.toLowerCase().includes(keyword) ||
+          item.description.toLowerCase().includes(keyword) ||
+          item.category.toLowerCase().includes(keyword) ||
+          item.tags.some(tag => tag.toLowerCase().includes(keyword)) ||
+          item.location.city.toLowerCase().includes(keyword) ||
+          item.location.state.toLowerCase().includes(keyword) ||
+          item.location.address.toLowerCase().includes(keyword)
+        );
+      }
+
+      // Additional location filtering if needed
+      if (filters.location && !queries.some(q => q.includes('city'))) {
+        const location = filters.location.toLowerCase();
+        filteredItems = filteredItems.filter(item =>
+          item.location.city.toLowerCase().includes(location) ||
+          item.location.state.toLowerCase().includes(location) ||
+          item.location.address.toLowerCase().includes(location)
+        );
+      }
+
       setItems(filteredItems);
-      setTotalItems(filteredItems.length);
+      setTotalItems(response.total);
+      setHasMore(response.total > offset + filteredItems.length);
+
+      console.log(`Loaded ${filteredItems.length} items out of ${response.total} total`);
+
+    } catch (error: any) {
+      console.error("Error fetching items:", error);
+      const errorMessage = handleAppwriteError(error);
+      setError(errorMessage);
+
+      // Fallback to empty array on error
+      setItems([]);
+      setTotalItems(0);
       setHasMore(false);
+    } finally {
       setLoading(false);
-      console.log("Demo items loaded:", filteredItems.length, "items");
-    }, 500);
+    }
   };
 
   const handleFilterChange = (key: keyof SearchFilters, value: any) => {
@@ -318,25 +327,26 @@ export default function Search() {
   };
 
   const categoryOptions = [
-    { value: "electronics", label: "📱 Electronics" },
-    { value: "jewelry", label: "💍 Jewelry" },
-    { value: "clothing", label: "👕 Clothing" },
-    { value: "bags", label: "🎒 Bags & Wallets" },
-    { value: "keys", label: "🔑 Keys" },
-    { value: "documents", label: "📄 Documents" },
-    { value: "pets", label: "🐕 Pets" },
-    { value: "vehicles", label: "🚗 Vehicles" },
-    { value: "sports", label: "⚽ Sports Equipment" },
-    { value: "books", label: "📚 Books" },
-    { value: "toys", label: "🧸 Toys" },
-    { value: "other", label: "📦 Other" },
+    { value: "Electronics", label: "📱 Electronics" },
+    { value: "Jewelry", label: "💍 Jewelry" },
+    { value: "Clothing", label: "👕 Clothing" },
+    { value: "Bags", label: "🎒 Bags & Wallets" },
+    { value: "Keys", label: "🔑 Keys" },
+    { value: "Documents", label: "📄 Documents" },
+    { value: "Pets", label: "🐕 Pets" },
+    { value: "Vehicles", label: "🚗 Vehicles" },
+    { value: "Sports Equipment", label: "⚽ Sports Equipment" },
+    { value: "Books", label: "📚 Books" },
+    { value: "Toys", label: "🧸 Toys" },
+    { value: "Accessories", label: "👜 Accessories" },
+    { value: "Other", label: "📦 Other" },
   ];
 
   return (
     <div className="min-h-screen bg-background">
       <Header />
 
-      <div className={"container mx-auto px-4 sm:px-6 lg:px-8 py-12\">px-8 py-12\">px-8 py-12"}>
+      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-12">
         {/* Success Alert */}
         {showSuccess && (
           <Alert className="mb-6 border-success bg-success/10">
@@ -344,6 +354,16 @@ export default function Search() {
             <AlertDescription className="text-success">
               Your item has been successfully reported! We'll notify you
               immediately if we find a match.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Error Alert */}
+        {error && (
+          <Alert className="mb-6 border-destructive bg-destructive/10">
+            <AlertCircle className="h-4 w-4 text-destructive" />
+            <AlertDescription className="text-destructive">
+              {error}
             </AlertDescription>
           </Alert>
         )}
@@ -418,7 +438,7 @@ export default function Search() {
         </div>
 
         {/* Search and Filters */}
-        <Card className={"mb-12\">ame=\"mb-12"}>
+        <Card className="mb-12">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <SearchIcon className="h-5 w-5" />

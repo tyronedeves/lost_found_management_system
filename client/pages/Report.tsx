@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useNotifications } from "@/contexts/NotificationContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -28,6 +29,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   CalendarIcon,
   Upload,
@@ -44,11 +46,17 @@ import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import Header from "@/components/Header";
 import { ItemCategory, LostItem, FoundItem } from "@shared/types";
+import { databases, ID, createItemDocument } from "@/lib/appwrite";
+
+// Appwrite configuration
+const DATABASE_ID = import.meta.env.VITE_APPWRITE_DATABASE_ID;
+const ITEMS_COLLECTION_ID = import.meta.env.VITE_APPWRITE_ITEMS_COLLECTION_ID;
 
 export default function Report() {
   const navigate = useNavigate();
   const { type } = useParams<{ type?: "lost" | "found" }>();
   const { triggerLostItemAlert } = useNotifications();
+  const { user } = useAuth();
   const [formType, setFormType] = useState<"lost" | "found">(type || "lost");
 
   // Enhanced input styling classes
@@ -58,6 +66,7 @@ export default function Report() {
   const [categories, setCategories] = useState<ItemCategory[]>([]);
   const [tags, setTags] = useState<string[]>([]);
   const [newTag, setNewTag] = useState("");
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // Form data
   const [formData, setFormData] = useState({
@@ -72,8 +81,8 @@ export default function Report() {
       landmark: "",
     },
     contactInfo: {
-      name: "",
-      email: "",
+      name: user?.name || "",
+      email: user?.email || "",
       phone: "",
       preferredContact: "email" as "email" | "phone",
       anonymous: false,
@@ -86,27 +95,28 @@ export default function Report() {
     images: [] as string[],
   });
 
-  // Load categories on mount
+  // Load categories and user info on mount
   useEffect(() => {
     fetchCategories();
-  }, []);
+    
+    // Pre-fill user contact info if logged in
+    if (user) {
+      setFormData(prev => ({
+        ...prev,
+        contactInfo: {
+          ...prev.contactInfo,
+          name: user.name || "",
+          email: user.email || "",
+        }
+      }));
+    }
+  }, [user]);
 
   const fetchCategories = async () => {
-    try {
-      const response = await fetch("/api/categories");
-      const data = await response.json();
-      if (data.success) {
-        setCategories(data.data);
-        return;
-      }
-    } catch (error) {
-      console.error("Error fetching categories:", error);
-    }
-
-    // Fallback to default categories if API fails
+    // Using default categories since you don't have a categories collection yet
     const defaultCategories = [
       "Electronics",
-      "Clothing",
+      "Clothing", 
       "Jewelry",
       "Books",
       "Keys",
@@ -149,61 +159,129 @@ export default function Report() {
     setTags(tags.filter((tag) => tag !== tagToRemove));
   };
 
+  const validateForm = () => {
+    if (!formData.title.trim()) {
+      setSubmitError("Item title is required");
+      return false;
+    }
+    if (!formData.description.trim()) {
+      setSubmitError("Description is required");
+      return false;
+    }
+    if (!formData.category) {
+      setSubmitError("Category is required");
+      return false;
+    }
+    if (!formData.location.city.trim()) {
+      setSubmitError("City is required");
+      return false;
+    }
+    if (!formData.location.state.trim()) {
+      setSubmitError("State is required");
+      return false;
+    }
+    if (!formData.contactInfo.name.trim()) {
+      setSubmitError("Your name is required");
+      return false;
+    }
+    if (!formData.contactInfo.email.trim()) {
+      setSubmitError("Email address is required");
+      return false;
+    }
+    if (formType === "lost" && !formData.dateLost) {
+      setSubmitError("Date lost is required");
+      return false;
+    }
+    if (formType === "found" && !formData.dateFound) {
+      setSubmitError("Date found is required");
+      return false;
+    }
+    if (!user) {
+      setSubmitError("Please log in to report an item");
+      return false;
+    }
+    
+    setSubmitError(null);
+    return true;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (!validateForm()) {
+      return;
+    }
+
     setIsSubmitting(true);
+    setSubmitError(null);
 
     try {
+      console.log("Submitting item to Appwrite...", { DATABASE_ID, ITEMS_COLLECTION_ID });
+
       const submitData = {
         type: formType,
-        title: formData.title,
-        description: formData.description,
+        title: formData.title.trim(),
+        description: formData.description.trim(),
         category: formData.category,
         location: formData.location,
         contactInfo: formData.contactInfo,
         tags,
         images: formData.images,
+        userId: user!.$id, // We know user exists from validation
+        status: "active",
         ...(formType === "lost"
           ? {
               dateLost: formData.dateLost?.toISOString(),
-              reward: formData.reward ? parseFloat(formData.reward) : undefined,
+              reward: formData.reward ? parseFloat(formData.reward) : 0,
             }
           : {
               dateFound: formData.dateFound?.toISOString(),
               handedToAuthority: formData.handedToAuthority,
               authorityContact: formData.authorityContact,
-              currentLocation: formData.location,
             }),
       };
 
-      const response = await fetch("/api/items", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(submitData),
-      });
+      console.log("Item data to submit:", submitData);
 
-      const result = await response.json();
+      // Create the document structure for Appwrite
+      const documentData = createItemDocument(submitData);
+      
+      console.log("Appwrite document data:", documentData);
 
-      if (result.success) {
-        // Trigger real-time alert only for lost items
-        if (formType === "lost") {
-          triggerLostItemAlert({
-            category: formData.category,
-            location: `${formData.location.city}, ${formData.location.state}`,
-            description: formData.description
-          });
-        }
+      // Save to Appwrite database
+      const createdDocument = await databases.createDocument(
+        DATABASE_ID,
+        ITEMS_COLLECTION_ID,
+        ID.unique(),
+        documentData
+      );
 
-        // Redirect to item details or success page
-        navigate(`/search?submitted=true`);
-      } else {
-        alert("Error submitting item: " + result.error);
+      console.log("Item successfully created:", createdDocument);
+
+      // Trigger real-time alert only for lost items
+      if (formType === "lost") {
+        triggerLostItemAlert({
+          category: formData.category,
+          location: `${formData.location.city}, ${formData.location.state}`,
+          description: formData.description
+        });
       }
-    } catch (error) {
-      console.error("Error submitting form:", error);
-      alert("Error submitting item. Please try again.");
+
+      // Redirect to the newly created item's details page
+      navigate(`/items/${createdDocument.$id}`);
+
+    } catch (error: any) {
+      console.error("Error submitting item:", error);
+      
+      if (error.code === 401) {
+        setSubmitError("Authentication required. Please log in and try again.");
+      } else if (error.code === 400) {
+        setSubmitError("Invalid data. Please check your input and try again.");
+      } else if (error.message?.includes('Failed to fetch')) {
+        setSubmitError("Unable to connect to the server. Please check your internet connection and try again.");
+      } else {
+        setSubmitError(error.message || "Failed to submit item. Please try again.");
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -240,6 +318,26 @@ export default function Report() {
               Our AI-powered matching system will notify relevant users immediately.
             </p>
           </div>
+
+          {/* Authentication Check */}
+          {!user && (
+            <Alert className="mb-6 border-orange-200 bg-orange-50">
+              <AlertCircle className="h-4 w-4 text-orange-600" />
+              <AlertDescription className="text-orange-800">
+                Please <a href="/login" className="underline font-semibold">log in</a> to report an item. This helps us verify your identity and contact you when matches are found.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Submit Error Alert */}
+          {submitError && (
+            <Alert className="mb-6 border-red-200 bg-red-50">
+              <AlertCircle className="h-4 w-4 text-red-600" />
+              <AlertDescription className="text-red-800">
+                {submitError}
+              </AlertDescription>
+            </Alert>
+          )}
 
           {/* Type Selection */}
           <div className="mb-8">
@@ -291,7 +389,7 @@ export default function Report() {
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="md:col-span-2">
-                      <Label htmlFor="title" className="text-base font-semibold text-slate-700 mb-2 block">
+                      <Label htmlFor="title" className={enhancedLabelStyles}>
                         Item Title *
                       </Label>
                       <Input
@@ -302,12 +400,12 @@ export default function Report() {
                           handleInputChange("title", e.target.value)
                         }
                         required
-                        className="h-12 text-base border-2 border-slate-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 rounded-lg shadow-sm hover:shadow-md transition-all duration-200 bg-white"
+                        className={enhancedInputStyles}
                       />
                     </div>
 
                     <div>
-                      <Label htmlFor="category" className="text-base font-semibold text-slate-700 mb-2 block">
+                      <Label htmlFor="category" className={enhancedLabelStyles}>
                         Category *
                       </Label>
                       <Select
@@ -317,7 +415,7 @@ export default function Report() {
                         }
                         required
                       >
-                        <SelectTrigger className="h-12 text-base border-2 border-slate-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 rounded-lg shadow-sm hover:shadow-md transition-all duration-200 bg-white">
+                        <SelectTrigger className={enhancedInputStyles}>
                           <SelectValue placeholder="Select category..." />
                         </SelectTrigger>
                         <SelectContent>
@@ -331,7 +429,7 @@ export default function Report() {
                     </div>
 
                     <div>
-                      <Label htmlFor="date">
+                      <Label htmlFor="date" className={enhancedLabelStyles}>
                         {formType === "lost" ? "Date Lost" : "Date Found"} *
                       </Label>
                       <Popover>
@@ -340,6 +438,7 @@ export default function Report() {
                             variant="outline"
                             className={cn(
                               "w-full justify-start text-left font-normal",
+                              enhancedInputStyles,
                               !(formType === "lost"
                                 ? formData.dateLost
                                 : formData.dateFound) &&
@@ -385,7 +484,7 @@ export default function Report() {
                   </div>
 
                   <div>
-                    <Label htmlFor="description" className="text-base font-semibold text-slate-700 mb-2 block">
+                    <Label htmlFor="description" className={enhancedLabelStyles}>
                       Detailed Description *
                     </Label>
                     <Textarea
@@ -402,7 +501,7 @@ export default function Report() {
 
                   {/* Tags */}
                   <div>
-                    <Label>Tags (Help others find your item)</Label>
+                    <Label className={enhancedLabelStyles}>Tags (Help others find your item)</Label>
                     <div className="flex gap-2 mb-2">
                       <Input
                         placeholder="Add tags like 'black', 'leather', 'iPhone'..."
@@ -411,8 +510,9 @@ export default function Report() {
                         onKeyPress={(e) =>
                           e.key === "Enter" && (e.preventDefault(), addTag())
                         }
+                        className={enhancedInputStyles}
                       />
-                      <Button type="button" onClick={addTag} size="icon">
+                      <Button type="button" onClick={addTag} size="icon" className="h-12 w-12">
                         <Plus className="h-4 w-4" />
                       </Button>
                     </div>
@@ -447,7 +547,7 @@ export default function Report() {
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="md:col-span-2">
-                      <Label htmlFor="address" className="text-base font-semibold text-slate-700 mb-2 block">
+                      <Label htmlFor="address" className={enhancedLabelStyles}>
                         Address *
                       </Label>
                       <Input
@@ -458,12 +558,12 @@ export default function Report() {
                           handleInputChange("location.address", e.target.value)
                         }
                         required
-                        className="h-12 text-base border-2 border-slate-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 rounded-lg shadow-sm hover:shadow-md transition-all duration-200 bg-white"
+                        className={enhancedInputStyles}
                       />
                     </div>
 
                     <div>
-                      <Label htmlFor="city" className="text-base font-semibold text-slate-700 mb-2 block">
+                      <Label htmlFor="city" className={enhancedLabelStyles}>
                         City *
                       </Label>
                       <Input
@@ -474,12 +574,12 @@ export default function Report() {
                           handleInputChange("location.city", e.target.value)
                         }
                         required
-                        className="h-12 text-base border-2 border-slate-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 rounded-lg shadow-sm hover:shadow-md transition-all duration-200 bg-white"
+                        className={enhancedInputStyles}
                       />
                     </div>
 
                     <div>
-                      <Label htmlFor="state">State *</Label>
+                      <Label htmlFor="state" className={enhancedLabelStyles}>State *</Label>
                       <Input
                         id="state"
                         placeholder="CA"
@@ -488,11 +588,12 @@ export default function Report() {
                           handleInputChange("location.state", e.target.value)
                         }
                         required
+                        className={enhancedInputStyles}
                       />
                     </div>
 
                     <div>
-                      <Label htmlFor="zipCode">ZIP Code</Label>
+                      <Label htmlFor="zipCode" className={enhancedLabelStyles}>ZIP Code</Label>
                       <Input
                         id="zipCode"
                         placeholder="94105"
@@ -500,11 +601,12 @@ export default function Report() {
                         onChange={(e) =>
                           handleInputChange("location.zipCode", e.target.value)
                         }
+                        className={enhancedInputStyles}
                       />
                     </div>
 
                     <div>
-                      <Label htmlFor="landmark">Nearby Landmark</Label>
+                      <Label htmlFor="landmark" className={enhancedLabelStyles}>Nearby Landmark</Label>
                       <Input
                         id="landmark"
                         placeholder="Near Starbucks, park entrance, etc."
@@ -512,6 +614,7 @@ export default function Report() {
                         onChange={(e) =>
                           handleInputChange("location.landmark", e.target.value)
                         }
+                        className={enhancedInputStyles}
                       />
                     </div>
                   </div>
@@ -521,30 +624,41 @@ export default function Report() {
 
                 {/* Type-specific fields */}
                 {formType === "lost" && (
-                  <div className="space-y-4">
-                    <h3 className="text-lg font-semibold flex items-center gap-2">
-                      <DollarSign className="h-5 w-5" />
+                  <div className="space-y-4 bg-slate-50 p-6 rounded-xl border border-slate-200">
+                    <h3 className="text-xl font-bold text-slate-800 flex items-center gap-3">
+                      <div className="h-10 w-10 bg-blue-100 rounded-lg flex items-center justify-center">
+                        <DollarSign className="h-5 w-5 text-blue-600" />
+                      </div>
                       Additional Information
                     </h3>
 
                     <div>
-                      <Label htmlFor="reward">Reward Amount (Optional)</Label>
+                      <Label htmlFor="reward" className={enhancedLabelStyles}>Reward Amount (Optional)</Label>
                       <Input
                         id="reward"
                         type="number"
                         placeholder="0"
+                        min="0"
+                        step="0.01"
                         value={formData.reward}
                         onChange={(e) =>
                           handleInputChange("reward", e.target.value)
                         }
+                        className={enhancedInputStyles}
                       />
+                      <p className="text-sm text-slate-600 mt-2">
+                        Offering a reward can increase the chances of finding your item.
+                      </p>
                     </div>
                   </div>
                 )}
 
                 {formType === "found" && (
-                  <div className="space-y-4">
-                    <h3 className="text-lg font-semibold">
+                  <div className="space-y-4 bg-slate-50 p-6 rounded-xl border border-slate-200">
+                    <h3 className="text-xl font-bold text-slate-800 flex items-center gap-3">
+                      <div className="h-10 w-10 bg-blue-100 rounded-lg flex items-center justify-center">
+                        <Shield className="h-5 w-5 text-blue-600" />
+                      </div>
                       Found Item Details
                     </h3>
 
@@ -556,7 +670,7 @@ export default function Report() {
                           handleInputChange("handedToAuthority", checked)
                         }
                       />
-                      <Label htmlFor="handedToAuthority">
+                      <Label htmlFor="handedToAuthority" className="text-base">
                         I have handed this item to authorities (police,
                         security, etc.)
                       </Label>
@@ -564,7 +678,7 @@ export default function Report() {
 
                     {formData.handedToAuthority && (
                       <div>
-                        <Label htmlFor="authorityContact">
+                        <Label htmlFor="authorityContact" className={enhancedLabelStyles}>
                           Authority Contact Information
                         </Label>
                         <Input
@@ -577,6 +691,7 @@ export default function Report() {
                               e.target.value,
                             )
                           }
+                          className={enhancedInputStyles}
                         />
                       </div>
                     )}
@@ -612,7 +727,7 @@ export default function Report() {
                     </div>
 
                     <div>
-                      <Label htmlFor="email">Email Address *</Label>
+                      <Label htmlFor="email" className={enhancedLabelStyles}>Email Address *</Label>
                       <Input
                         id="email"
                         type="email"
@@ -622,11 +737,12 @@ export default function Report() {
                           handleInputChange("contactInfo.email", e.target.value)
                         }
                         required
+                        className={enhancedInputStyles}
                       />
                     </div>
 
                     <div>
-                      <Label htmlFor="phone">Phone Number</Label>
+                      <Label htmlFor="phone" className={enhancedLabelStyles}>Phone Number</Label>
                       <Input
                         id="phone"
                         placeholder="+1-555-0123"
@@ -634,11 +750,12 @@ export default function Report() {
                         onChange={(e) =>
                           handleInputChange("contactInfo.phone", e.target.value)
                         }
+                        className={enhancedInputStyles}
                       />
                     </div>
 
                     <div>
-                      <Label htmlFor="preferredContact">
+                      <Label htmlFor="preferredContact" className={enhancedLabelStyles}>
                         Preferred Contact Method
                       </Label>
                       <Select
@@ -650,7 +767,7 @@ export default function Report() {
                           )
                         }
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className={enhancedInputStyles}>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -669,7 +786,7 @@ export default function Report() {
                         handleInputChange("contactInfo.anonymous", checked)
                       }
                     />
-                    <Label htmlFor="anonymous">
+                    <Label htmlFor="anonymous" className="text-base">
                       Keep my contact information private (only share when
                       there's a potential match)
                     </Label>
@@ -693,13 +810,18 @@ export default function Report() {
                   <Button
                     type="submit"
                     size="lg"
-                    disabled={isSubmitting}
-                    className="w-full max-w-md h-16 text-xl font-bold bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white shadow-2xl hover:shadow-3xl transform hover:scale-105 transition-all duration-300 rounded-xl mb-4"
+                    disabled={isSubmitting || !user}
+                    className="w-full max-w-md h-16 text-xl font-bold bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white shadow-2xl hover:shadow-3xl transform hover:scale-105 transition-all duration-300 rounded-xl mb-4 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
                   >
                     {isSubmitting ? (
                       <>
                         <Clock className="mr-3 h-6 w-6 animate-spin" />
                         Submitting Your Report...
+                      </>
+                    ) : !user ? (
+                      <>
+                        <AlertCircle className="mr-3 h-6 w-6" />
+                        Please Log In to Submit
                       </>
                     ) : (
                       <>
@@ -709,10 +831,19 @@ export default function Report() {
                     )}
                   </Button>
 
-                  <div className="flex items-center justify-center gap-2 text-sm text-slate-600">
-                    <span className="h-2 w-2 bg-green-400 rounded-full animate-pulse"></span>
-                    We'll notify you immediately if we find a match!
-                  </div>
+                  {user && (
+                    <div className="flex items-center justify-center gap-2 text-sm text-slate-600">
+                      <span className="h-2 w-2 bg-green-400 rounded-full animate-pulse"></span>
+                      We'll notify you immediately if we find a match!
+                    </div>
+                  )}
+
+                  {!user && (
+                    <div className="flex items-center justify-center gap-2 text-sm text-slate-600">
+                      <AlertCircle className="h-4 w-4" />
+                      <a href="/login" className="underline font-semibold">Log in</a> or <a href="/register" className="underline font-semibold">create an account</a> to continue
+                    </div>
+                  )}
                 </div>
               </form>
             </CardContent>
